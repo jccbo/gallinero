@@ -228,13 +228,15 @@ function stats(a,b){
   return o;
 }
 function stockHuevos(){return sum(batches(),b=>b.n)-sum(recs('salida'),x=>x.huevos)}
+const racion=()=>{const c=S.docs.get('cfg')||{};return +c.kgDia>0?+c.kgDia:1};
 function stockAli(){
-  const comp=recs('compra').filter(c=>c.cat==='Alimento');
-  if(!comp.length)return {kg:null,dias:null};
-  const kg=sum(comp,c=>c.kg)-sum(recs('dia'),d=>d.ali);
-  const dias7=[];for(let i=0;i<14&&dias7.length<7;i++){const r=dayRec(addDays(today(),-i));if(r&&+r.ali>0)dias7.push(+r.ali)}
-  const avg=dias7.length?dias7.reduce((a,b)=>a+b,0)/dias7.length:0;
-  return {kg,dias:avg>0?kg/avg:null};
+  const comp=recs('compra').filter(c=>c.cat==='Alimento'&&+c.kg>0);
+  if(!comp.length)return {kg:null,dias:null,fin:null};
+  const k=racion(),t=today(),ini=comp.map(c=>c.fecha).sort()[0];
+  let cons=0;
+  for(let d=ini;d<=t;d=addDays(d,1)){const r=dayRec(d);if(r&&r.ali!=null)cons+=+r.ali;else if(d<t)cons+=k}
+  const kg=sum(comp,c=>c.kg)-cons;
+  return {kg:kg,dias:kg>0?kg/k:0,fin:kg>0?addDays(t,Math.floor(kg/k)):null};
 }
 function alerts(){
   const out=[],t=today();
@@ -243,7 +245,7 @@ function alerts(){
   if(last.length>=6){const av=a=>a.reduce((x,y)=>x+y,0)/a.length;const r3=av(last.slice(0,3)),pv=av(last.slice(3));
     if(pv>=2&&r3<pv*0.7)out.push({l:'warn',t:'La postura bajó '+Math.round((1-r3/pv)*100)+' % frente a los días anteriores. Revisa agua, alimento, muda, luz y depredadores.'})}
   const sa=stockAli();
-  if(sa.dias!=null&&sa.dias<=5)out.push({l:sa.dias<=2?'bad':'warn',t:'Alimento para unos '+Math.max(0,Math.floor(sa.dias))+' días.'});
+  if(sa.kg!=null&&sa.kg<=0)out.push({l:'bad',t:'Según tus registros ya se acabó el alimento. Si compraste más, regístralo en Compras.'});else if(sa.dias!=null&&sa.dias<=5)out.push({l:sa.dias<=2?'bad':'warn',t:'Alimento para unos '+Math.floor(sa.dias)+' días.'});
   recs('sanidad').filter(x=>x.proxima&&!x.hecho).sort((a,b)=>a.proxima.localeCompare(b.proxima)).forEach(x=>{
     const n=diff(x.proxima,t),nm=(x.cat||'')+(x.producto?' · '+x.producto:'');
     if(n<0)out.push({l:'bad',t:'Vencido hace '+(-n)+' d: '+nm});else if(n<=7)out.push({l:'warn',t:(n===0?'Hoy toca: ':'En '+n+' d: ')+nm});
@@ -316,7 +318,7 @@ function viewHoy(){
   }).join('')+'</div>';
   h+='</div>';
   h+='<form class="card" id="dayform" onsubmit="return false"><h2>Datos del día</h2><div class="formgrid">';
-  h+='<div class="fld"><label for="f_ali">Alimento servido (kg)</label><input id="f_ali" type="number" inputmode="decimal" step="0.05" min="0" value="'+esc(r.ali==null?'':r.ali)+'"></div>';
+  h+='<div class="fld"><label for="f_ali">Alimento servido (kg)</label><input id="f_ali" type="number" inputmode="decimal" step="0.05" min="0" placeholder="'+racion()+'" value="'+esc(r.ali==null?'':r.ali)+'"></div>';
   h+='<div class="fld"><label for="f_luz">Horas de luz</label><input id="f_luz" type="number" inputmode="decimal" step="0.5" min="0" max="24" value="'+esc(r.luz==null?'':r.luz)+'"></div>';
   h+='<label class="chk full"><input type="checkbox" id="f_agua"'+(r.agua?' checked':'')+'> Agua y comedero revisados</label>';
   h+='<div class="fld full"><label for="f_notas">Notas del día</label><textarea id="f_notas" placeholder="Calor, lluvia, aves decaídas, ruidos de noche…">'+esc(r.notas||'')+'</textarea></div>';
@@ -381,8 +383,8 @@ function viewVentas(){
 function viewCompras(){
   const cs=recs('compra').sort(byDateDesc),sa=stockAli();
   const mes=today().slice(0,8)+'01',gm=stats(mes,today());
-  let h='<div class="grid2">'+tile('Alimento en bodega',sa.kg==null?'–':num(sa.kg,1)+' kg','big',sa.dias!=null?'≈ '+Math.max(0,Math.floor(sa.dias))+' días':'')+tile('Gastos del mes',money(gm.gastos))+'</div>';
-  h+='<button class="btn primary" data-act="addCompra">+ Registrar compra</button>';
+  let h='<div class="grid2">'+tile('Alimento en bodega',sa.kg==null?'–':num(Math.max(0,sa.kg),1)+' kg','big',sa.kg==null?'':sa.kg<=0?'se acabó; revisa tus compras':'≈ '+Math.floor(sa.dias)+' días, hasta el '+fmtD(sa.fin))+tile('Gastos del mes',money(gm.gastos))+'</div>';
+  h+='<div class="row wrap"><button class="btn primary" data-act="addCompra">+ Registrar compra</button><button class="btn" data-act="cfgRacion">Ración diaria: '+num(racion(),2)+' kg</button></div><p class="hint" style="margin:0">Cada día cuenta la ración diaria desde tu primera compra de alimento. Si anotas el alimento servido en Hoy, se usa ese número.</p>';
   h+='<div class="card"><h2>Compras</h2>';
   if(!cs.length)h+='<div class="empty"><b>Sin compras registradas</b>Anota el costo del alimento y los kilos para ver cuánto te cuesta cada huevo.</div>';
   else h+='<div class="list">'+cs.map(x=>'<button class="item" data-act="editDoc" data-id="'+esc(x.id)+'"><div><div class="t">'+esc(x.cat)+(x.desc?' · '+esc(x.desc):'')+'</div><div class="s">'+esc(fmtD(x.fecha,{day:'numeric',month:'short'}))+(x.kg?' · '+num(x.kg,1)+' kg':'')+(x.prov?' · '+esc(x.prov):'')+'</div></div><div class="r">'+money(x.costo)+'</div></button>').join('')+'</div>';
@@ -500,7 +502,7 @@ function buildWorkbook(R){
     ['Costo por huevo bueno',{f:'IF(B6>0,B14/B6,"")',v:st.costoHuevo==null?'':st.costoHuevo,z:'$#,##0.00'},'Gastos ÷ huevos buenos'],
     ['Por cobrar de este periodo',{v:st.cobrar,z:'$#,##0.00'},'Ventas no pagadas'],
     ['Huevos en existencia hoy',{v:stockHuevos()},'Todos los huevos buenos − salidas'],
-    ['Alimento en bodega hoy (kg)',{v:stockAli().kg==null?'':stockAli().kg,z:'0.0'},'Compras de alimento − servido'],
+    ['Alimento en bodega hoy (kg)',{v:stockAli().kg==null?'':Math.max(0,stockAli().kg),z:'0.0'},'Compras − alimento servido (o la ración diaria si no lo anotas)'],
     ['Peso promedio del huevo (g)',{v:pesoProm==null?'':pesoProm,z:'0.0'},'Promedio de las recolecciones con peso']];
   const sheets=[['Resumen',mkSheet(rr,[34,16,40])],['Diario',mkSheet(dr,[12,6,9,9,8,8,9,13,14,10,13,9,14,40])],['Recolecciones',mkSheet(lrr,[12,8,16,9,8,9,13,16,11,16,13,15,30])],['Ventas',mkSheet(vr,[12,16,20,9,16,12,9,30])],['Compras',mkSheet(cr,[12,20,26,10,10,14,18,12,30])],['Salud y eventos',mkSheet(sr,[12,9,22,26,20,16,10,12,13,11,34])],['Gallinas',mkSheet(gr,[16,10,16,12,12,13,10,14,10,30])]];
   if(R.mode==='mes'){
@@ -606,7 +608,7 @@ function formCompra(x){
   openForm({title:x.id?'Editar compra':'Compra',values:Object.assign({fecha:today(),cat:'Alimento',unidad:'bulto'},x),
     fields:[{k:'cat',label:'Categoría',type:'select',opts:CATS_COMPRA},{k:'fecha',label:'Fecha',type:'date'},{k:'desc',label:'Descripción',type:'text',full:true,ph:'Ej. alimento de postura'},
       {k:'cant',label:'Cantidad',type:'number'},{k:'unidad',label:'Unidad',type:'text'},{k:'kg',label:'Kilos de alimento',type:'number'},{k:'costo',label:'Costo total ($)',type:'number'},{k:'prov',label:'Proveedor',type:'text',full:true},{k:'notas',label:'Notas',type:'area',full:true}],
-    hint:v=>v.cat==='Alimento'&&v.kg&&v.costo?'Sale a '+money(v.costo/v.kg)+' el kilo.':'',
+    hint:v=>v.cat==='Alimento'&&v.kg?(v.costo?'Sale a '+money(v.costo/v.kg)+' el kilo. ':'')+'Alcanza para '+num(v.kg/racion(),0)+' días con '+num(racion(),2)+' kg diarios.':'',
     onSave:async v=>{v.tipo='compra';await write(x.id||'c-'+uid(),v)},
     onDelete:x.id?()=>del(x.id):null});
 }
@@ -626,12 +628,18 @@ function formReco(x){
     },
     onDelete:x.id?()=>del(x.id):null});
 }
+function formRacion(){
+  openForm({title:'Ración diaria de alimento',values:{kgDia:racion()},
+    fields:[{k:'kgDia',label:'Kilos por día (todas las gallinas)',type:'number',step:'0.05'}],
+    hint:x=>x.kgDia>0?'Un bulto de 20 kg dura '+num(20/x.kgDia,0)+' días.':'',
+    onSave:async x=>{if(!(x.kgDia>0)){toast('Anota un número mayor que cero.');return false}await write('cfg',Object.assign({},S.docs.get('cfg')||{},{tipo:'cfg',kgDia:x.kgDia}))}});
+}
 function formVida(){
   const v=vida();
   openForm({title:'Días para vender el huevo',values:{vidaAmb:v.amb,vidaRef:v.ref},
     fields:[{k:'vidaAmb',label:'A temperatura ambiente',type:'number',step:'1'},{k:'vidaRef',label:'Refrigerado',type:'number',step:'1'}],
     hint:()=>'Los días cuentan desde el día que recoges el huevo. Con el calor de Iguala conviene ser conservador.',
-    onSave:async x=>{await write('cfg',{tipo:'cfg',vidaAmb:x.vidaAmb||14,vidaRef:x.vidaRef||28})}});
+    onSave:async x=>{await write('cfg',Object.assign({},S.docs.get('cfg')||{},{tipo:'cfg',vidaAmb:x.vidaAmb||14,vidaRef:x.vidaRef||28}))}});
 }
 function editDoc(id){
   const d=S.docs.get(id);if(!d)return;const x=Object.assign({},d,{id});
@@ -668,6 +676,7 @@ document.addEventListener('click',async ev=>{
   else if(a==='addCompra')formCompra();
   else if(a==='addReco')formReco();
   else if(a==='cfgVida')formVida();
+  else if(a==='cfgRacion')formRacion();
   else if(a==='fotoQuit'){if(formSpec){formSpec.foto=undefined;const im=$('#mf_foto_img');if(im)im.style.visibility='hidden'}}
   else if(a==='editDoc')editDoc(el.dataset.id);
   else if(a==='doneSalud'){const d=S.docs.get(el.dataset.id);if(d){await write(el.dataset.id,Object.assign({},d,{hecho:true}));toast('Marcado como hecho')}}
